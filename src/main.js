@@ -17,12 +17,7 @@ class Point {
   update(deltaTime) {
     const deltaSquared = deltaTime ** 2;
 
-    const tiny = () => 500 * (Math.random() - 0.5);
-    const force = new THREE.Vector3(0, 0, 0);
-
-    if (Math.random() > 0.9) {
-      force.set(0, 0, tiny());
-    }
+    const force = new THREE.Vector3(0, 0, 100); // Wind !
 
     const k = 0.99; // Damping constant
     const newX = this.vector.x + (k * (this.vector.x - this.previousVector.x)) +
@@ -75,6 +70,19 @@ class Strand {
   }
 }
 
+class PositionConstraint {
+  constructor(point, targetPosition) {
+    this.point = point;
+    this.targetPosition = targetPosition;
+  }
+
+  resolve() {
+    this.point.vector.copy(this.targetPosition);
+  }
+
+  updateGeometry() {}
+}
+
 class DistanceConstraint {
   constructor(pointA, pointB, length) {
     this.pointA = pointA;
@@ -111,7 +119,7 @@ class Web {
     this.points = [];
     this.constraints = [];
 
-    const spacing = BAR_LENGTH + 5;
+    const spacing = BAR_LENGTH;
     const clothCountX = 10;
     const clothCountY = 10;
     const startX = -(clothCountX * spacing) / 2;
@@ -134,6 +142,10 @@ class Web {
         }
 
         this.points.push(p);
+
+        if ((x === 0 && y === 0) || (x === clothCountX - 1 && y === 0) || (x === 0 && y === clothCountY - 1) || (x === clothCountX - 1 && y === clothCountY - 1)) {
+          this.constraints.push(new PositionConstraint(p, p.vector.clone().multiplyScalar(0.8)));
+        }
       }
     }
   }
@@ -179,14 +191,14 @@ Promise.all([vertShaderPromise, fragShaderPromise])
 let cloth;
 resourceTracker.on('loaded', (resourceName) => {
   cloth = new Web();
-  cloth.constraints.forEach(({ strand }) => scene.add(strand.object));
+  cloth.constraints.forEach(({ strand }) => strand && scene.add(strand.object));
   console.log(`Loaded "${resourceName}"!`);
 });
 
 function animate() {
   requestAnimationFrame(animate);
 
-  const timer = Date.now() * 0.0001;
+  const timer = Date.now() * 0.001;
   camera.position.x = Math.cos(timer) * 800;
   camera.position.z = Math.sin(timer) * 800;
   camera.lookAt(scene.position);
