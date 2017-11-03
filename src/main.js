@@ -2,11 +2,17 @@ const THREE = require('three');
 const { EventEmitter } = require('events');
 
 const get = require('./get');
+const { DistanceConstraint, PositionConstraint } = require('./constraints');
+const resources = require('./resources');
 
-const BAR_LENGTH = 50;
+const BAR_LENGTH = 10;
 
-const resources = [];
 const resourceTracker = new EventEmitter();
+
+// FIXME remove
+let oscillator;
+let originalTarget;
+let cloth;
 
 class Point {
   constructor(x, y, z) {
@@ -17,9 +23,10 @@ class Point {
   update(deltaTime) {
     const deltaSquared = deltaTime ** 2;
 
-    const force = new THREE.Vector3(0, 0, 100); // Wind !
+    // const force = new THREE.Vector3(0, 0, 10); // Wind !
+    const force = new THREE.Vector3(0, 0, 0); // Wind !
 
-    const k = 0.99; // Damping constant
+    const k = 0.99999; // Damping constant
     const newX = this.vector.x + (k * (this.vector.x - this.previousVector.x)) +
       ((force.x / 2) * deltaSquared);
     const newY = this.vector.y + (k * (this.vector.y - this.previousVector.y)) +
@@ -32,85 +39,6 @@ class Point {
   }
 }
 
-class Strand {
-  constructor(start, end, count = 2) {
-    if (count < 2) {
-      throw new Error('Strand must have at least two points');
-    }
-
-    this.pointCount = count;
-
-    this.positions = new THREE.Float32BufferAttribute(this.pointCount * 3, 3);
-    this.displacement = new THREE.Float32BufferAttribute(this.pointCount * 3, 3);
-
-    this.geometry = new THREE.BufferGeometry();
-    this.geometry.addAttribute('position', this.positions);
-    this.geometry.addAttribute('displacement', this.displacement);
-
-    this.object = new THREE.Line(this.geometry, resources['strand-material']);
-
-    // TODO use count to generate interpolated points
-    this.set([start.clone(), end.clone()]);
-  }
-
-  set(newPoints) {
-    if (newPoints.length !== this.pointCount) {
-      throw new Error('Must set strand using array containing same number of points');
-    }
-
-    const { array } = this.geometry.attributes.position;
-    for (let i = 0; i < newPoints.length; i += 1) {
-      const ai = i * 3;
-      array[ai] = newPoints[i].x;
-      array[ai + 1] = newPoints[i].y;
-      array[ai + 2] = newPoints[i].z;
-    }
-
-    this.object.geometry.attributes.position.needsUpdate = true;
-  }
-}
-
-class PositionConstraint {
-  constructor(point, targetPosition) {
-    this.point = point;
-    this.targetPosition = targetPosition;
-  }
-
-  resolve() {
-    this.point.vector.copy(this.targetPosition);
-  }
-
-  updateGeometry() {}
-}
-
-class DistanceConstraint {
-  constructor(pointA, pointB, length) {
-    this.pointA = pointA;
-    this.pointB = pointB;
-    this.length = length;
-
-    this.strand = new Strand(this.pointA.vector, this.pointB.vector);
-  }
-
-  resolve() {
-    const diffX = this.pointA.vector.x - this.pointB.vector.x;
-    const diffY = this.pointA.vector.y - this.pointB.vector.y;
-    const diffZ = this.pointA.vector.z - this.pointB.vector.z;
-    const dist = this.pointA.vector.distanceTo(this.pointB.vector);
-    const normError = (this.length - dist) / dist;
-
-    // TODO how exactly does this work? Draw some pictures
-    const perturbed = new THREE.Vector3(diffX * normError * 0.5, diffY * normError * 0.5, diffZ * normError * 0.5);
-
-    this.pointA.vector.add(perturbed);
-    this.pointB.vector.sub(perturbed);
-  }
-
-  updateGeometry() {
-    this.strand.set([this.pointA.vector, this.pointB.vector]);
-  }
-}
-
 class Web {
   constructor() {
     // How many times to iterate towards a solution to the constraints
@@ -119,6 +47,7 @@ class Web {
     this.points = [];
     this.constraints = [];
 
+    /*
     const spacing = BAR_LENGTH;
     const clothCountX = 10;
     const clothCountY = 10;
@@ -144,10 +73,13 @@ class Web {
         this.points.push(p);
 
         if ((x === 0 && y === 0) || (x === clothCountX - 1 && y === 0) || (x === 0 && y === clothCountY - 1) || (x === clothCountX - 1 && y === clothCountY - 1)) {
-          this.constraints.push(new PositionConstraint(p, p.vector.clone().multiplyScalar(0.8)));
+          this.constraints.push(new PositionConstraint(p, p.vector.clone()));
         }
       }
     }
+
+    [oscillator] = this.constraints.filter(c => !!c.targetPosition).reverse();
+    */
   }
 
   update(deltaTime) {
@@ -188,23 +120,57 @@ Promise.all([vertShaderPromise, fragShaderPromise])
     resourceTracker.emit('loaded', 'strand-material');
   });
 
-let cloth;
 resourceTracker.on('loaded', (resourceName) => {
   cloth = new Web();
-  cloth.constraints.forEach(({ strand }) => strand && scene.add(strand.object));
   console.log(`Loaded "${resourceName}"!`);
+
+  get(require('./mesh.csv')).then((mesh) => {
+    const lines = mesh.split('\n');
+    lines.forEach((line) => {
+      if (line.trim().length === 0) {
+        return;
+      }
+
+      const [x1, y1, z1, x2, y2, z2] = line.split(',').map(part => parseFloat(part));
+
+      // console.log(x1, y1, z1, x2, y2, z2);
+
+      const s = 100;
+      const start = new Point(x1 * s, y1 * s, z1 * s);
+      const end = new Point(x2 * s, y2 * s, z2 * s);
+
+      cloth.points.push(start);
+      cloth.points.push(end);
+
+      cloth.constraints.push(new DistanceConstraint(start, end));
+    });
+
+    cloth.constraints.forEach(({ strand }) => strand && scene.add(strand.object));
+  });
+
+  //console.log(oscillator);
+  //originalTarget = oscillator.targetPosition.clone();
 });
+
+const r = 3 * Math.PI / 4;
+camera.position.x = Math.cos(r) * 800;
+camera.position.z = Math.sin(r) * 800;
+camera.lookAt(scene.position);
 
 function animate() {
   requestAnimationFrame(animate);
 
-  const timer = Date.now() * 0.001;
-  camera.position.x = Math.cos(timer) * 800;
-  camera.position.z = Math.sin(timer) * 800;
+  const seconds = Date.now() / 1000;
+  camera.position.x = Math.cos(seconds) * 800;
+  camera.position.z = Math.sin(seconds) * 800;
   camera.lookAt(scene.position);
 
   if (cloth) {
-    cloth.update(1 / 60);
+    //if (originalTarget) {
+      //oscillator.targetPosition.set(originalTarget.x, originalTarget.y, originalTarget.z + (50 * Math.sin(10 * seconds)));
+    //}
+
+    //cloth.update(1 / 60);
   }
 
   renderer.render(scene, camera);

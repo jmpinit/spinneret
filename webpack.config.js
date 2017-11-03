@@ -20,7 +20,7 @@ module.exports = {
         },
       },
       {
-        test: /\.(vert|frag)$/,
+        test: /\.(vert|frag|csv)$/,
         loader: 'file-loader',
         options: {
           name: '[name].[ext]',
