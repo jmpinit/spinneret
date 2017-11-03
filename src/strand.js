@@ -11,12 +11,27 @@ class Strand {
 
     this.positions = new THREE.Float32BufferAttribute(this.pointCount * 3, 3);
     this.displacement = new THREE.Float32BufferAttribute(this.pointCount * 3, 3);
+    this.color = new THREE.Float32BufferAttribute(3, 3);
 
     this.geometry = new THREE.BufferGeometry();
     this.geometry.addAttribute('position', this.positions);
     this.geometry.addAttribute('displacement', this.displacement);
+    this.geometry.addAttribute('color', this.color);
 
-    this.object = new THREE.Line(this.geometry, resources['strand-material']);
+    const material = new THREE.ShaderMaterial({
+      uniforms: {
+        r: { value: 1 },
+        g: { value: 1 },
+        b: { value: 1 },
+      },
+      vertexShader: resources['constraint-vertex-shader'],
+      fragmentShader: resources['constraint-fragment-shader'],
+      blending: THREE.AdditiveBlending,
+      depthTest: false,
+      transparent: true,
+    });
+
+    this.object = new THREE.Line(this.geometry, material);
 
     // TODO use count to generate interpolated points
     this.set([start.clone(), end.clone()]);

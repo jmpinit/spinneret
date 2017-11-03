@@ -109,14 +109,8 @@ const fragShaderPromise = get(require('./shaders/constraint.frag'));
 
 Promise.all([vertShaderPromise, fragShaderPromise])
   .then(([vertShader, fragShader]) => {
-    resources['strand-material'] = new THREE.ShaderMaterial({
-      vertexShader: vertShader,
-      fragmentShader: fragShader,
-      blending: THREE.AdditiveBlending,
-      depthTest: false,
-      transparent: true,
-    });
-
+    resources['constraint-vertex-shader'] = vertShader;
+    resources['constraint-fragment-shader'] = fragShader;
     resourceTracker.emit('loaded', 'strand-material');
   });
 
@@ -133,8 +127,6 @@ resourceTracker.on('loaded', (resourceName) => {
 
       const [x1, y1, z1, x2, y2, z2] = line.split(',').map(part => parseFloat(part));
 
-      // console.log(x1, y1, z1, x2, y2, z2);
-
       const s = 100;
       const start = new Point(x1 * s, y1 * s, z1 * s);
       const end = new Point(x2 * s, y2 * s, z2 * s);
@@ -147,9 +139,6 @@ resourceTracker.on('loaded', (resourceName) => {
 
     cloth.constraints.forEach(({ strand }) => strand && scene.add(strand.object));
   });
-
-  //console.log(oscillator);
-  //originalTarget = oscillator.targetPosition.clone();
 });
 
 const r = 3 * Math.PI / 4;
@@ -166,14 +155,32 @@ function animate() {
   camera.lookAt(scene.position);
 
   if (cloth) {
-    //if (originalTarget) {
-      //oscillator.targetPosition.set(originalTarget.x, originalTarget.y, originalTarget.z + (50 * Math.sin(10 * seconds)));
-    //}
-
-    //cloth.update(1 / 60);
+    cloth.update(1 / 60);
   }
 
   renderer.render(scene, camera);
 }
 
 animate();
+
+document.onmousemove = (event) => {
+  const mousePosition = new THREE.Vector3(2 * (event.clientX / window.innerWidth) - 1, 1 - 2 * (event.clientY / window.innerHeight), 0);
+
+  mousePosition.unproject(camera);
+
+  const raycaster = new THREE.Raycaster(camera.position, mousePosition.sub(camera.position).normalize());
+
+  const lines = cloth.constraints.reduce((ls, constraint) => ls.concat(constraint.strand.object), []);
+
+  const intersections = raycaster.intersectObjects(lines);
+
+  for (let j = 0; j < intersections.length; j += 1) {
+    const intersection = intersections[j];
+    const { object } = intersection;
+
+    object.material.uniforms.r.value = 1;
+    object.material.uniforms.g.value = 0;
+    object.material.uniforms.b.value = 0;
+    object.material.needsUpdate = true;
+  }
+};
