@@ -5,14 +5,57 @@ const get = require('./get');
 const { DistanceConstraint, PositionConstraint } = require('./constraints');
 const resources = require('./resources');
 
-const BAR_LENGTH = 10;
+const BAR_LENGTH = 100;
 
 const resourceTracker = new EventEmitter();
 
-// FIXME remove
-let oscillator;
-let originalTarget;
-let cloth;
+let theWeb;
+const anchors = [];
+
+const ws = new WebSocket('ws://localhost:8080');
+ws.onopen = () => {
+  ws.send(JSON.stringify({
+    command: 'register',
+    type: 'controller',
+  }));
+
+  console.log('Websocket connection open');
+};
+ws.onmessage = (message) => {
+  try {
+    const data = JSON.parse(message.data);
+
+    if (data.command === 'notify') {
+      console.log(`Notification from service #${data.service}`);
+
+      if (data.service < anchors.length) {
+        anchors[data.service].shake(10, 500 + Math.random() * 2000);
+        ws.send(JSON.stringify({
+          command: 'buzz',
+          intensity: 255,
+          duration: 500 + Math.random() * 2000,
+        }));
+      } else {
+        console.warn('Notification for unknown service!');
+      }
+    }
+  } catch (e) {
+    console.error(e);
+  }
+};
+
+function createIcon(canvas) {
+  const texture = new THREE.Texture(canvas);
+  texture.needsUpdate = true;
+  const material = new THREE.MeshBasicMaterial({
+    map: texture,
+    side: THREE.DoubleSide,
+  });
+
+  const geometry = new THREE.PlaneGeometry(50, 50);
+
+  return new THREE.Mesh(geometry, material);
+}
 
 class Point {
   constructor(x, y, z) {
@@ -23,8 +66,8 @@ class Point {
   update(deltaTime) {
     const deltaSquared = deltaTime ** 2;
 
-    // const force = new THREE.Vector3(0, 0, 10); // Wind !
-    const force = new THREE.Vector3(0, 0, 0); // Wind !
+    // Gravity
+    const force = new THREE.Vector3(0, 0, -100);
 
     const k = 0.99999; // Damping constant
     const newX = this.vector.x + (k * (this.vector.x - this.previousVector.x)) +
@@ -39,6 +82,133 @@ class Point {
   }
 }
 
+class Anchor extends Point {
+  constructor(image, x, y, z) {
+    if (z < 0) {
+      throw new Error('Z > 0');
+    }
+
+    super(x, y, z);
+
+    const geometry = new THREE.CylinderGeometry(5, 5, z, 32);
+    const material = new THREE.MeshBasicMaterial({ color: 0xffffff });
+    const postCylinder = new THREE.Mesh(geometry, material);
+    postCylinder.rotation.x = Math.PI / 2;
+    postCylinder.position.z = -z / 2;
+
+    this.object = new THREE.Object3D();
+    this.object.add(createIcon(image));
+    this.object.add(postCylinder);
+
+    this.anchorPosition = new THREE.Vector3(x, y, z);
+    this.constraint = new PositionConstraint(this, this.anchorPosition.clone());
+    theWeb.constraints.push(this.constraint);
+
+    this.shaking = {
+      enabled: false,
+      amplitude: null,
+      time: null,
+    };
+  }
+
+  shake(amplitude, duration) {
+    this.shaking.enabled = true;
+    this.shaking.amplitude = amplitude;
+    setTimeout(() => { this.shaking.enabled = false; }, duration);
+  }
+
+  grab(web, threshold = 10) {
+    let numberGrabbed = 0;
+
+    web.points.forEach((pt) => {
+      if (pt === this) {
+        return;
+      }
+
+      const dist = this.vector.distanceTo(pt.vector);
+
+      if (dist < threshold) {
+        const positionConstraint = new DistanceConstraint(this, pt, 0);
+        web.constraints.push(positionConstraint);
+
+        numberGrabbed += 1;
+      }
+    });
+
+    return numberGrabbed;
+  }
+
+  update(deltaTime) {
+    super.update(deltaTime);
+
+    if (this.shaking.enabled) {
+      this.shaking.time += deltaTime;
+
+      const amp = this.shaking.amplitude;
+
+      this.constraint.targetPosition.set(
+        this.anchorPosition.x + (amp * Math.random()),
+        this.anchorPosition.y + (amp * Math.random()),
+        this.anchorPosition.z,
+      );
+    }
+
+    if (!this.ensnared) {
+      const grabbed = this.grab(theWeb, 10);
+
+      if (grabbed > 0) {
+        this.ensnared = true;
+      }
+    }
+
+    this.object.position.copy(this.vector);
+  }
+}
+
+class Prey extends Point {
+  constructor(image, x, y, z) {
+    super(x, y, z);
+
+    this.object = createIcon(image);
+    this.ensnared = false;
+  }
+
+  grab(web, threshold = 10) {
+    let numberGrabbed = 0;
+
+    web.points.forEach((pt) => {
+      if (pt === this) {
+        return;
+      }
+
+      const dist = this.vector.distanceTo(pt.vector);
+
+      if (dist < threshold) {
+        const positionConstraint = new DistanceConstraint(this, pt, 0);
+        web.constraints.push(positionConstraint);
+
+        numberGrabbed += 1;
+      }
+    });
+
+    return numberGrabbed;
+  }
+
+  update(deltaTime) {
+    super.update(deltaTime);
+
+    if (!this.ensnared) {
+      const grabbed = this.grab(theWeb, 10);
+
+      if (grabbed > 0) {
+        this.ensnared = true;
+      }
+    }
+
+    this.object.position.copy(this.vector);
+  }
+}
+
 class Web {
   constructor() {
     // How many times to iterate towards a solution to the constraints
@@ -46,40 +216,6 @@ class Web {
 
     this.points = [];
     this.constraints = [];
-
-    /*
-    const spacing = BAR_LENGTH;
-    const clothCountX = 10;
-    const clothCountY = 10;
-    const startX = -(clothCountX * spacing) / 2;
-    const startY = -(clothCountY * spacing) / 2;
-
-    for (let y = 0; y <= clothCountY; y += 1) {
-      for (let x = 0; x <= clothCountX; x += 1) {
-        const p = new Point(startX + (x * spacing), startY + (y * spacing), 0);
-
-        if (x !== 0) {
-          const leftPoint = this.points[this.points.length - 1];
-          const horizBar = new DistanceConstraint(leftPoint, p, BAR_LENGTH);
-          this.constraints.push(horizBar);
-        }
-
-        if (y !== 0) {
-          const topPoint = this.points[x + ((y - 1) * (clothCountX + 1))];
-          const vertBar = new DistanceConstraint(topPoint, p, BAR_LENGTH);
-          this.constraints.push(vertBar);
-        }
-
-        this.points.push(p);
-
-        if ((x === 0 && y === 0) || (x === clothCountX - 1 && y === 0) || (x === 0 && y === clothCountY - 1) || (x === clothCountX - 1 && y === clothCountY - 1)) {
-          this.constraints.push(new PositionConstraint(p, p.vector.clone()));
-        }
-      }
-    }
-
-    [oscillator] = this.constraints.filter(c => !!c.targetPosition).reverse();
-    */
   }
 
   update(deltaTime) {
@@ -104,8 +240,8 @@ const renderer = new THREE.WebGLRenderer();
 renderer.setSize(window.innerWidth, window.innerHeight);
 document.body.appendChild(renderer.domElement);
 
-const vertShaderPromise = get(require('./shaders/constraint.vert'));
-const fragShaderPromise = get(require('./shaders/constraint.frag'));
+const vertShaderPromise = get.raw(require('./shaders/constraint.vert'));
+const fragShaderPromise = get.raw(require('./shaders/constraint.frag'));
 
 Promise.all([vertShaderPromise, fragShaderPromise])
   .then(([vertShader, fragShader]) => {
@@ -115,10 +251,13 @@ Promise.all([vertShaderPromise, fragShaderPromise])
   });
 
 resourceTracker.on('loaded', (resourceName) => {
-  cloth = new Web();
+  theWeb = new Web();
   console.log(`Loaded "${resourceName}"!`);
 
-  get(require('./mesh.csv')).then((mesh) => {
+  get.raw('./assets/web.json').then((webString) => {
+    const web = JSON.parse(webString);
+    console.log(web);
+    /*
     const lines = mesh.split('\n');
     lines.forEach((line) => {
       if (line.trim().length === 0) {
@@ -131,31 +270,110 @@ resourceTracker.on('loaded', (resourceName) => {
       const start = new Point(x1 * s, y1 * s, z1 * s);
       const end = new Point(x2 * s, y2 * s, z2 * s);
 
-      cloth.points.push(start);
-      cloth.points.push(end);
+      theWeb.points.push(start);
+      theWeb.points.push(end);
 
-      cloth.constraints.push(new DistanceConstraint(start, end));
+      theWeb.constraints.push(new DistanceConstraint(start, end));
+    });
+    */
+
+    /*
+    const spacing = BAR_LENGTH;
+    const clothCountX = 10;
+    const clothCountY = 10;
+    const startX = -(clothCountX * spacing) / 2;
+    const startY = -(clothCountY * spacing) / 2;
+    const z = 100;
+
+    for (let y = 0; y <= clothCountY; y += 1) {
+      for (let x = 0; x <= clothCountX; x += 1) {
+        const p = new Point(startX + (x * spacing), startY + (y * spacing), z);
+
+        if (x !== 0) {
+          const leftPoint = theWeb.points[theWeb.points.length - 1];
+          const horizBar = new DistanceConstraint(leftPoint, p, BAR_LENGTH);
+          theWeb.constraints.push(horizBar);
+        }
+
+        if (y !== 0) {
+          const topPoint = theWeb.points[x + ((y - 1) * (clothCountX + 1))];
+          const vertBar = new DistanceConstraint(topPoint, p, BAR_LENGTH);
+          theWeb.constraints.push(vertBar);
+        }
+
+        theWeb.points.push(p);
+
+        if ((x === 0 && y === 0) || (x === clothCountX && y === 0) || (x === 0 && y === clothCountY) || (x === clothCountX && y === clothCountY)) {
+          theWeb.constraints.push(new PositionConstraint(p, p.vector.clone()));
+        }
+      }
+    }
+    */
+
+    const getPoint = pid => web.points.filter(({ id }) => id === `${pid}`)[0];
+    const pointsByID = [];
+
+    const scale = 800;
+    web.constraints.forEach(([idStart, idEnd]) => {
+      let startPt;
+      let endPt;
+
+      if (idStart in pointsByID) {
+        startPt = pointsByID[idStart];
+      } else {
+        const start = getPoint(idStart);
+        startPt = new Point(start.x * scale, start.y * scale, 200);
+        pointsByID[idStart] = startPt;
+        theWeb.points.push(startPt);
+      }
+
+      if (idEnd in pointsByID) {
+        endPt = pointsByID[idEnd];
+      } else {
+        const end = getPoint(idEnd);
+        endPt = new Point(end.x * scale, end.y * scale, 200);
+        pointsByID[idEnd] = endPt;
+        theWeb.points.push(endPt);
+      }
+
+      const dist = startPt.vector.distanceTo(endPt.vector);
+
+      theWeb.constraints.push(new DistanceConstraint(startPt, endPt, dist));
     });
 
-    cloth.constraints.forEach(({ strand }) => strand && scene.add(strand.object));
+    theWeb.constraints.forEach(({ strand }) => strand && scene.add(strand.object));
+
+    const addAnchor = (index, image) => {
+      const anchorPtIndex = web.anchors[index];
+      const pt = getPoint(anchorPtIndex);
+      const anchor = new Anchor(image, pt.x * scale, pt.y * scale, 100);
+      anchors.push(anchor);
+      theWeb.points.push(anchor);
+      scene.add(anchor.object);
+    };
+
+    get.imageAsCanvas('/images/hn.ico').then(image => addAnchor(0, image));
+    get.imageAsCanvas('/images/youtube.png').then(image => addAnchor(1, image));
+    get.imageAsCanvas('/images/gmail.png').then(image => addAnchor(2, image));
   });
 });
 
 const r = 3 * Math.PI / 4;
-camera.position.x = Math.cos(r) * 800;
-camera.position.z = Math.sin(r) * 800;
+//camera.position.x = Math.cos(r) * 800;
+camera.position.z = 800;
+camera.position.y = -800;
 camera.lookAt(scene.position);
 
 function animate() {
   requestAnimationFrame(animate);
 
   const seconds = Date.now() / 1000;
-  camera.position.x = Math.cos(seconds) * 800;
-  camera.position.z = Math.sin(seconds) * 800;
-  camera.lookAt(scene.position);
+  //camera.position.x = Math.sin(seconds / 10) * 800;
+  //camera.position.y = Math.cos(seconds / 10) * 800;
+  //camera.lookAt(scene.position);
 
-  if (cloth) {
-    cloth.update(1 / 60);
+  if (theWeb) {
+    theWeb.update(1 / 60);
   }
 
   renderer.render(scene, camera);
@@ -163,14 +381,18 @@ function animate() {
 
 animate();
 
-document.onmousemove = (event) => {
+document.onmousedown = (event) => {
   const mousePosition = new THREE.Vector3(2 * (event.clientX / window.innerWidth) - 1, 1 - 2 * (event.clientY / window.innerHeight), 0);
 
   mousePosition.unproject(camera);
 
   const raycaster = new THREE.Raycaster(camera.position, mousePosition.sub(camera.position).normalize());
 
-  const lines = cloth.constraints.reduce((ls, constraint) => ls.concat(constraint.strand.object), []);
+  const lines = theWeb.constraints.reduce((ls, constraint) => (
+    constraint.strand !== undefined ?
+      ls.concat(constraint.strand.object)
+      : ls
+  ), []);
 
   const intersections = raycaster.intersectObjects(lines);
 
