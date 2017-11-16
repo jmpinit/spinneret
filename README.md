@@ -1,5 +1,7 @@
 # Spinneret
 
+![](https://i.imgur.com/TamQrn4.gif)
+
 Manage attention online like spiders do, by building webs.
 
 There's good reason to argue that spiders [use their webs as an integral part of their minds](https://doi.org/10.1007/s10071-017-1069-7) ([nice article here](https://www.theatlantic.com/science/archive/2017/05/spider-brain-spider-brain/528153/)). By creating and manipulating webs of their silk they build systems for modulating their limited attention. When a spider is hungry [it tensions its web so it can respond more quickly to smaller prey](https://dx.doi.org/10.1098%2Frspb.2009.1583). How that works can in part be explained by [the acoustics of spider silk](https://doi.org/10.1002/adma.201401027). Spider silk is an amazing nanomaterial which happens to have the largest wavespeed range of any known material, making it ideal for the kind of acoustic filter networks spiders need to offload some of the sensory analysis problems inherent in the way they catch prey.
